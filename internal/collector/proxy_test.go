@@ -3,8 +3,10 @@ package collector
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	io_prometheus_client "github.com/prometheus/client_model/go"
@@ -142,5 +144,46 @@ func TestProxy_ExcludedPath_StillProxiesRequest(t *testing.T) {
 
 	if rr.Code != http.StatusTeapot {
 		t.Errorf("upstream status = %d, want %d (request must still be proxied)", rr.Code, http.StatusTeapot)
+	}
+}
+
+// TestProxy_ModifyResponse_ParsesFinalChunk verifies that token metrics are
+// recorded from both a single-object (non-streaming) response and a
+// newline-delimited streaming response, where the totals live in the last line.
+func TestProxy_ModifyResponse_ParsesFinalChunk(t *testing.T) {
+	done := `{"model":"llama3:8b","done":true,"load_duration":1000000000,` +
+		`"prompt_eval_count":75,"prompt_eval_duration":500000000,` +
+		`"eval_count":24,"eval_duration":1200000000}`
+	bodies := map[string]string{
+		"non_streaming": done,
+		"streaming_ndjson": `{"model":"llama3:8b","done":false,"response":"hel"}` + "\n" +
+			`{"model":"llama3:8b","done":false,"response":"lo"}` + "\n" + done + "\n",
+	}
+
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			proxy, reg := newTestProxy(t, nil)
+			req := httptest.NewRequest(http.MethodPost, "/api/chat", nil)
+			resp := &http.Response{
+				Request: req,
+				Header:  make(http.Header),
+				Body:    io.NopCloser(strings.NewReader(body)),
+			}
+
+			if err := proxy.modifyResponse(resp); err != nil {
+				t.Fatalf("modifyResponse: %v", err)
+			}
+
+			for _, name := range []string{"ollama_prompt_tokens", "ollama_generated_tokens", "ollama_eval_duration_seconds"} {
+				if got := histSampleCount(t, reg, name); got != 1 {
+					t.Errorf("%s sample count = %d, want 1", name, got)
+				}
+			}
+
+			// The body must be restored for the downstream client.
+			if b, _ := io.ReadAll(resp.Body); len(b) != len(body) {
+				t.Errorf("restored body len = %d, want %d", len(b), len(body))
+			}
+		})
 	}
 }

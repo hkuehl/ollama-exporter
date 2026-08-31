@@ -17,6 +17,7 @@ type Metrics struct {
 	ModelLoadEventsTotal     *prometheus.CounterVec
 	ModelUnloadEventsTotal   *prometheus.CounterVec
 	ModelLoadDurationSeconds *prometheus.HistogramVec
+	ModelContextLength       *prometheus.GaugeVec
 
 	// Per-request inference (proxy mode)
 	RequestDuration      *prometheus.HistogramVec
@@ -28,6 +29,8 @@ type Metrics struct {
 	RequestsInFlight     *prometheus.GaugeVec
 	RequestsTotal        *prometheus.CounterVec
 	KVCachePressureRatio *prometheus.GaugeVec
+	PromptTokens         *prometheus.HistogramVec
+	GeneratedTokens      *prometheus.HistogramVec
 }
 
 // New constructs and registers all metrics with the given registry.
@@ -81,6 +84,12 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help:      "Time spent loading a model, sourced from the load_duration field in proxied /api/generate and /api/chat responses.",
 			Buckets:   []float64{0.5, 1, 2, 5, 10, 20, 30, 60, 120},
 		}, []string{"model"}),
+
+		ModelContextLength: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "ollama",
+			Name:      "model_context_length",
+			Help:      "Context window (num_ctx) the model is currently loaded with, in tokens, from /api/ps.",
+		}, []string{"model", "family", "quant"}),
 
 		RequestDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: "ollama",
@@ -139,6 +148,20 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name:      "kv_cache_pressure_ratio",
 			Help:      "Derived KV cache pressure: prompt_eval_duration_ns / prompt_eval_count. Rising values suggest cache misses.",
 		}, []string{"model", "family", "quant"}),
+
+		PromptTokens: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "ollama",
+			Name:      "prompt_tokens",
+			Help:      "Prompt tokens processed per request (prompt_eval_count) — how much of the context window a request used. Divide by model_context_length for utilization.",
+			Buckets:   prometheus.ExponentialBuckets(16, 2, 15), // 16 … 262144
+		}, []string{"model", "family", "quant"}),
+
+		GeneratedTokens: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "ollama",
+			Name:      "generated_tokens",
+			Help:      "Output tokens generated per request (eval_count).",
+			Buckets:   prometheus.ExponentialBuckets(16, 2, 15), // 16 … 262144
+		}, []string{"model", "family", "quant"}),
 	}
 
 	reg.MustRegister(
@@ -150,6 +173,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.ModelLoadEventsTotal,
 		m.ModelUnloadEventsTotal,
 		m.ModelLoadDurationSeconds,
+		m.ModelContextLength,
 		m.RequestDuration,
 		m.LoadDuration,
 		m.PromptEvalDuration,
@@ -159,6 +183,8 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.RequestsInFlight,
 		m.RequestsTotal,
 		m.KVCachePressureRatio,
+		m.PromptTokens,
+		m.GeneratedTokens,
 	)
 
 	return m

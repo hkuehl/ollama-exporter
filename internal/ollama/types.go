@@ -17,6 +17,9 @@ type RunningModel struct {
 	Digest    string    `json:"digest"`
 	ExpiresAt time.Time `json:"expires_at"`
 	SizeVRAM  int64     `json:"size_vram"`
+	// ContextLength is the context window (num_ctx) the model is loaded with,
+	// in tokens. Present in Ollama /api/ps responses; 0 if the field is absent.
+	ContextLength int64 `json:"context_length"`
 }
 
 // TagsResponse is the response from GET /api/tags.

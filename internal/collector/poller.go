@@ -76,6 +76,9 @@ func (p *Poller) scrape(ctx context.Context) {
 
 		p.metrics.ModelLoaded.WithLabelValues(labels...).Set(1)
 		p.metrics.ModelVRAMBytes.WithLabelValues(labels...).Set(float64(m.SizeVRAM))
+		if m.ContextLength > 0 {
+			p.metrics.ModelContextLength.WithLabelValues(labels...).Set(float64(m.ContextLength))
+		}
 
 		currentLoaded[m.Name] = true
 
@@ -98,6 +101,7 @@ func (p *Poller) scrape(ctx context.Context) {
 			info := p.mc.Get(ctx, name)
 			p.metrics.ModelLoaded.WithLabelValues(name, info.Family, info.Quant).Set(0)
 			p.metrics.ModelVRAMBytes.WithLabelValues(name, info.Family, info.Quant).Set(0)
+			p.metrics.ModelContextLength.WithLabelValues(name, info.Family, info.Quant).Set(0)
 			p.metrics.ModelUnloadTotal.WithLabelValues(name, info.Family, info.Quant).Inc()
 			p.metrics.ModelUnloadEventsTotal.WithLabelValues(name).Inc()
 		}

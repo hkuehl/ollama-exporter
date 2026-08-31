@@ -149,9 +149,13 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 	resp.ContentLength = int64(len(body))
 	resp.TransferEncoding = nil // clear chunked encoding if set
 
+	// Ollama streams /api/generate and /api/chat as newline-delimited JSON; the
+	// final line carries done=true with the timing and token totals. For a
+	// non-streaming request the whole body is that single object. Either way,
+	// the last non-empty line is the one to parse.
 	var gen ollama.GenerateResponse
-	if err := json.Unmarshal(body, &gen); err != nil {
-		return nil //nolint:nilerr // intentional: non-generate/streaming responses must not fail the proxy
+	if err := json.Unmarshal(lastNonEmptyLine(body), &gen); err != nil {
+		return nil //nolint:nilerr // non-generate/other responses must not fail the proxy
 	}
 	if !gen.Done {
 		return nil
@@ -189,7 +193,25 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 		}
 	}
 
+	if gen.PromptEvalCount > 0 {
+		p.metrics.PromptTokens.WithLabelValues(labels...).Observe(float64(gen.PromptEvalCount))
+	}
+	if gen.EvalCount > 0 {
+		p.metrics.GeneratedTokens.WithLabelValues(labels...).Observe(float64(gen.EvalCount))
+	}
+
 	p.metrics.RequestsTotal.WithLabelValues(append(labels, path)...).Inc()
 
 	return nil
+}
+
+// lastNonEmptyLine returns the last non-empty newline-delimited line of b with
+// surrounding whitespace trimmed. Ollama streams NDJSON where the final line is
+// the done=true summary; for a non-streaming response the whole body is one line.
+func lastNonEmptyLine(b []byte) []byte {
+	b = bytes.TrimRight(b, " \t\r\n")
+	if i := bytes.LastIndexByte(b, '\n'); i >= 0 {
+		b = b[i+1:]
+	}
+	return bytes.TrimSpace(b)
 }
